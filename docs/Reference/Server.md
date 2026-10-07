@@ -224,6 +224,71 @@ in front.
 > ℹ️ Note:
 >  At the time of writing, only node >= v14.11.0 supports this option
 
+### `handlerTimeout`
+<a id="factory-handler-timeout"></a>
+
++ Default: `0` (no timeout)
+
+Defines the maximum number of milliseconds allowed for processing a request
+through the entire route lifecycle (from routing through onRequest, parsing,
+validation, handler execution, and serialization). If the response is not sent
+within this time, a `503 Service Unavailable` error is returned and
+`request.signal` is aborted.
+
+Unlike `connectionTimeout` and `requestTimeout` (which operate at the socket
+level), `handlerTimeout` is an application-level timeout that works correctly
+with HTTP keep-alive connections. It can be overridden per-route via
+[route options](./Routes.md#routes-options). When set at both levels, the
+route-level value takes precedence. Routes without an explicit `handlerTimeout`
+inherit the server default. Once a server-level timeout is set, individual
+routes cannot opt out of it — they can only override it with a different
+positive integer.
+
+The timeout is **cooperative**: when it fires, Fastify sends the 503 error
+response, but the handler's async work continues to run. Use
+[`request.signal`](./Request.md) to detect cancellation and stop ongoing work
+(database queries, HTTP requests, etc.). APIs that accept a `signal` option
+(`fetch()`, database drivers, `stream.pipeline()`) will cancel automatically.
+
+The timeout error (`FST_ERR_HANDLER_TIMEOUT`) is sent through the route's
+[error handler](./Routes.md#routes-options), which can be customized per-route
+to change the status code or response body.
+
+When `reply.hijack()` is called, the timeout timer is cleared — the handler
+takes full responsibility for the response lifecycle.
+
+> ℹ️ Note:
+> `handlerTimeout` does not apply to 404 handlers or custom not-found handlers
+> set via `setNotFoundHandler()`, as they bypass the route handler lifecycle.
+
+```js
+const fastify = require('fastify')({
+  handlerTimeout: 10000 // 10s default for all routes
+})
+
+// Override per-route
+fastify.get('/slow-report', { handlerTimeout: 120000 }, async (request) => {
+  // Use request.signal for cooperative cancellation
+  const data = await db.query(longQuery, { signal: request.signal })
+  return data
+})
+
+// Customize the timeout response
+fastify.get('/custom-timeout', {
+  handlerTimeout: 5000,
+  errorHandler: (error, request, reply) => {
+    if (error.code === 'FST_ERR_HANDLER_TIMEOUT') {
+      reply.code(504).send({ error: 'Gateway Timeout' })
+    } else {
+      reply.send(error)
+    }
+  }
+}, async (request) => {
+  const result = await externalService.call({ signal: request.signal })
+  return result
+})
+```
+
 ### `bodyLimit`
 <a id="factory-body-limit"></a>
 
@@ -330,6 +395,20 @@ message when a request is received and when the response for that request has
 been sent. By setting this option to `true`, these log messages will be
 disabled. This allows for more flexible request start and end logging by
 attaching custom `onRequest` and `onResponse` hooks.
+
+This option can also be a function that receives the Fastify request object
+and returns a boolean. This allows for conditional request logging based on the
+request properties (e.g., URL, headers, decorations).
+
+```js
+const fastify = require('fastify')({
+  logger: true,
+  disableRequestLogging: (request) => {
+    // Disable logging for health check endpoints
+    return request.url === '/health' || request.url === '/ready'
+  }
+})
+```
 
 The other log entries that will be disabled are:
 - an error log written by the default `onResponse` hook on reply callback errors
@@ -839,6 +918,12 @@ const fastify = require('fastify')({
 })
 ```
 
+> **Note**
+> The `req` and `res` objects passed to `defaultRoute` are the raw Node.js
+> `IncomingMessage` and `ServerResponse` instances. They do **not** expose the
+> Fastify-specific methods available on `FastifyRequest`/`FastifyReply` (for
+> example, `res.send`).
+
 ### `ignoreDuplicateSlashes`
 <a id="factory-ignore-duplicate-slashes"></a>
 
@@ -929,6 +1014,9 @@ const fastify = require('fastify')({
   }
 })
 ```
+
+As with `defaultRoute`, `req` and `res` are the raw Node.js request/response
+objects and do not provide Fastify's decorated helpers.
 
 ### `querystringParser`
 <a id="querystringparser"></a>
@@ -1789,8 +1877,8 @@ different plugins can set different logger factories.
 <a id="set-gen-req-id"></a>
 
 `fastify.setGenReqId(function (rawReq))` Synchronous function for setting the request-id
-for additional Fastify instances. It will receive the _raw_ incoming request as a
-parameter. The provided function should not throw an Error in any case.
+for additional Fastify instances. It will receive the _raw_ incoming request as
+a parameter. The provided function should not throw an Error in any case.
 
 Especially in distributed systems, you may want to override the default ID
 generation behavior to handle custom ways of generating different IDs in
@@ -2138,6 +2226,7 @@ initial options passed down by the user to the Fastify instance.
 The properties that can currently be exposed are:
 - connectionTimeout
 - keepAliveTimeout
+- handlerTimeout
 - bodyLimit
 - caseSensitive
 - http2
