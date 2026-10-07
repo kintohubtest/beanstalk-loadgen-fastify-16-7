@@ -32,7 +32,8 @@ const {
   kKeepAliveConnections,
   kChildLoggerFactory,
   kGenReqId,
-  kErrorHandlerAlreadySet
+  kErrorHandlerAlreadySet,
+  kHandlerTimeout
 } = require('./lib/symbols.js')
 
 const { createServer } = require('./lib/server')
@@ -149,6 +150,7 @@ function fastify (serverOptions) {
     [kChildren]: [],
     [kServerBindings]: [],
     [kBodyLimit]: options.bodyLimit,
+    [kHandlerTimeout]: options.handlerTimeout,
     [kRoutePrefix]: '',
     [kLogLevel]: '',
     [kLogSerializers]: null,
@@ -643,7 +645,8 @@ function fastify (serverOptions) {
       const request = new Request(id, null, req, null, childLogger, onBadUrlContext)
       const reply = new Reply(res, request, childLogger)
 
-      if (disableRequestLogging === false) {
+      const resolvedDisableRequestLogging = typeof disableRequestLogging === 'function' ? disableRequestLogging(req) : disableRequestLogging
+      if (resolvedDisableRequestLogging === false) {
         childLogger.info({ req: request }, 'incoming request')
       }
 
@@ -668,7 +671,8 @@ function fastify (serverOptions) {
           const request = new Request(id, null, req, null, childLogger, onBadUrlContext)
           const reply = new Reply(res, request, childLogger)
 
-          if (disableRequestLogging === false) {
+          const resolvedDisableRequestLogging = typeof disableRequestLogging === 'function' ? disableRequestLogging(req) : disableRequestLogging
+          if (resolvedDisableRequestLogging === false) {
             childLogger.info({ req: request }, 'incoming request')
           }
 
